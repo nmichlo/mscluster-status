@@ -1,20 +1,34 @@
+import asyncio
 import json
 import os
+import random
 import time
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
+from pprint import pprint
 from typing import List
 from typing import NoReturn
 from typing import Optional
+from typing import Sequence
 from typing import Tuple
 
+import aiohttp
+import bs4
+import discord  # pip install py-cord
+import discord.ext.commands
+import discord.ext.tasks
 import fabric
+import requests
+from cachier import cachier
+from discord import RequestsWebhookAdapter
 from paramiko.ssh_exception import SSHException
 
 
 # ========================================================================= #
 # PARSE SINFO                                                               #
 # ========================================================================= #
+
 
 class Now(object):
 
@@ -68,6 +82,14 @@ class ClusterStatus:
             online=self.online,
             error_msg=self.error_msg,
         )
+
+    @property
+    def status(self) -> str:
+        return 'online' if self.online else 'offline'
+
+    @property
+    def status_msg(self):
+        return 'online' if self.online else f'offline ({self.error_msg})'
 
     @staticmethod
     def from_dict(dat: dict) -> 'ClusterStatus':
@@ -174,43 +196,76 @@ class SshConnectionHandler(object):
 # ========================================================================= #
 
 
-def load_artifact(artifact: str) -> List[dict]:
-    dat = []
-    if os.path.exists(artifact):
-        try:
-            with open(artifact, 'r') as fp:
-                dat = json.load(fp)
-        except Exception as e:
-            print('Failed to load artifact:')
-    return dat
+class ArtefactHandler(object):
 
+    def __init__(self, path: str, max_age: int = 60*60*24):
+        self._path = path
+        self._max_age = max_age
+        assert max_age > 0
+        # inner storage
+        self._entries: List[ClusterStatus] = None
 
-def save_artifact(artifact: str, dat: List[dict]) -> NoReturn:
-    with open(artifact, 'w') as fp:
-        json.dump(dat, fp)
+    @property
+    def max_age(self):
+        return self._max_age
 
+    @property
+    def is_open(self):
+        return (self._entries is not None)
 
-def append_status(entries: List[ClusterStatus], status: ClusterStatus, max_age: int = 60 * 60 * 24) -> List[ClusterStatus]:
-    # make sure that the status we are appending is newer than everything else
-    assert all(status.poll_time > entry.poll_time for entry in entries)
-    # filter the old values
-    entries = [entry for entry in entries if (status.poll_time - entry.poll_time < max_age)]
-    # append the item
-    entries.append(status)
-    # sort entries in ascending order of poll_time, this means the oldest entries are first
-    entries = sorted(entries, key=lambda entry: entry.poll_time)
-    # done!
-    return entries
+    @property
+    def entries(self):
+        if not self.is_open:
+            raise RuntimeError('The artifact handler is not open')
+        return list(self._entries)
 
+    def __enter__(self):
+        if self.is_open:
+            raise RuntimeError('The artifact handler is already open')
+        # load the data from the file
+        raw_entries = []
+        if os.path.exists(self._path):
+            try:
+                with open(self._path, 'r') as fp:
+                    raw_entries = json.load(fp)
+            except Exception as e:
+                print('Failed to load artifact:')
+        # convert to lists of objects and append the new status
+        entries = []
+        for status in raw_entries:
+            try:
+                entries.append(ClusterStatus.from_dict(status))
+            except Exception as e:
+                warnings.warn(f'dropped invalid entry: {status}, reason: {e}')
+        # store on this object
+        self._entries = entries
+        return self
 
-def convert_and_drop_invalid_statuses(entries: List[dict]) -> List[ClusterStatus]:
-    converted = []
-    for status in entries:
-        try:
-            converted.append(ClusterStatus.from_dict(status))
-        except Exception as e:
-            warnings.warn(f'dropped invalid entry: {status}, reason: {e}')
-    return converted
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self.is_open:
+            raise RuntimeError('The artifact handler is already closed')
+        # convert back to lists of dictionaries
+        raw_entries = [status.to_dict() for status in self._entries]
+        # save to disk
+        with open(self._path, 'w') as fp:
+            json.dump(raw_entries, fp)
+        return self
+
+    def push(self, status: ClusterStatus) -> NoReturn:
+        if not self.is_open:
+            raise RuntimeError('The artifact handler is not open')
+        # make sure that the status we are appending is newer than everything else
+        assert all(status.poll_time > entry.poll_time for entry in self._entries)
+        # filter the old values
+        entries = [entry for entry in self._entries if (status.poll_time - entry.poll_time < self.max_age)]
+        # append the item
+        entries.append(status)
+        # sort entries in ascending order of poll_time, this means the oldest entries are first
+        entries = sorted(entries, key=lambda entry: entry.poll_time)
+        # done!
+        self._entries = entries
+        return self.entries
+
 
 # ========================================================================= #
 # UPDATE HANDLER                                                            #
@@ -219,60 +274,180 @@ def convert_and_drop_invalid_statuses(entries: List[dict]) -> List[ClusterStatus
 
 class Notifier(object):
 
-    def force_update_state(self, curr: ClusterStatus):
-        raise NotImplementedError
+    def on_poll(self, curr: ClusterStatus):
+        pass
 
-    def update_state_to_online(self, curr: ClusterStatus, prev: ClusterStatus):
-        raise NotImplementedError
+    def on_first_status(self, curr: ClusterStatus):
+        pass
 
-    def update_state_to_offline(self, curr: ClusterStatus, prev: ClusterStatus):
-        raise NotImplementedError
+    def on_changed_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        pass
 
-    def generic_update_state(self, curr: ClusterStatus, prev: ClusterStatus):
-        raise NotImplementedError
+    def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        pass
 
     def dispatch(self, entries: List[ClusterStatus]):
         # checks
         if len(entries) < 0:
             raise RuntimeError('This should never happen!')
-        # handle the correct case
+        # always poll
         curr = entries[-1]
+        self.on_poll(curr)
+        # handle the correct case
         if len(entries) == 1:
-            self.force_update_state(curr)
+            self.on_first_status(curr)
         else:
             prev = entries[-2]
             if curr.online != prev.online:
-                if curr.online:
-                    self.update_state_to_online(curr=curr, prev=prev)
-                else:
-                    self.update_state_to_offline(curr=curr, prev=prev)
+                self.on_changed_status(curr=curr, prev=prev)
             else:
-                self.generic_update_state(curr=curr, prev=prev)
+                self.on_unchanged_status(curr=curr, prev=prev)
 
 
 class ConsoleNotifier(Notifier):
 
-    def force_update_state(self, curr: ClusterStatus):
-        if curr.online:
-            print(f'started polling, cluster is: ONLINE')
-        else:
-            print(f'started polling, cluster is: OFFLINE ({curr.error_msg})')
+    def on_poll(self, curr: ClusterStatus):
+        pass
 
-    def update_state_to_online(self, curr: ClusterStatus, prev: ClusterStatus):
-        print(f'cluster is now: ONLINE')
+    def on_first_status(self, curr: ClusterStatus):
+        print(f'started polling, cluster is: {curr.status_msg}')
 
-    def update_state_to_offline(self, curr: ClusterStatus, prev: ClusterStatus):
-        print(f'cluster is now: OFFLINE ({curr.error_msg})')
+    def on_changed_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        print(f'cluster is now: {curr.status_msg}')
 
-    def generic_update_state(self, curr: ClusterStatus, prev: ClusterStatus):
-        if curr.online:
-            print(f'no change in cluster status: ONLINE')
-        else:
-            print(f'no change in cluster status: OFFLINE ({curr.error_msg})')
+    def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        print(f'no change in cluster status: {curr.status_msg}')
 
 
-class DiscordNotifier(ConsoleNotifier):
-    pass
+class DiscordNotifier(Notifier):
+
+    def __init__(
+        self,
+        webhook_url: str = None,
+        username: str = None,
+        avatar_url: str = None,
+        cluster_name: str = 'mscluster0',
+        num_emojies: int = 3,
+        append_qoute: bool = False,
+        update_on_unchanged: bool = False,
+    ):
+        self._webhook_url = os.environ['DISCORD_WEBHOOK'] if (webhook_url is None) else webhook_url
+        self._username = username
+        self._avatar_url = avatar_url
+        self._cluster_name = cluster_name
+        self._num_emojies = num_emojies
+        self._append_qoute = append_qoute
+        self._update_on_unchanged = update_on_unchanged
+        # construct the webhook
+        self._webhook = discord.Webhook.from_url(
+            url=self._webhook_url,
+            adapter=discord.RequestsWebhookAdapter(),
+        )
+
+    def _send(self, content: str):
+        self._webhook.send(
+            content=content,
+            wait=True,
+            username=self._username,
+            avatar_url=self._avatar_url,
+            tts=False,
+            file=None,
+            files=None,
+            embed=None,
+            embeds=None,
+            allowed_mentions=None,
+        )
+
+    def _make_msg(self, curr: ClusterStatus):
+        # get emojis to use
+        online = ['✨', '🌟', '🏆', '🥇', '👍', '🙌', '👏', '🤩', '💃', '🕺', '🌞', '🧃', '🍫', '🍦', '🥧', '🍯', '🎉', '🎊', '🥂', '🍾', '🎈', '🥳', '💪', '🆗', '🆙', '✔️', '💯', '💡', '❤️']
+        offline = ['🃏', '💤', '❗️', '❌', '🚫', '⚠️', '🧨', '💣', '🛠', '🪤', '🏚', '🏗', '🚧', '⛈', '🐋', '🐒', '🙈', '🙉', '🤒', '😴', '🤬', '💀', '🤡', '😡', '🆘', '⛔️', '⁉️', '💔', '🏁']
+        # shuffle the emojies
+        emojies = online if curr.online else offline
+        random.shuffle(emojies)
+        # get a random qoute
+        qoute = ''
+        if self._append_qoute:
+            try:
+                qoute = get_random_qoute(keywords=('love', 'success', 'happiness', 'life') if online else ('truth', 'pain', 'death'))
+                qoute, author = qoute.split(' — ')
+                qoute = f'\n> *{qoute}*' \
+                        f'\n> - **{author}**'
+            except:
+                pass
+        # generate the string!
+        status = f'**{curr.status.upper()}**'
+        emoji_l = f'{"".join(emojies[:self._num_emojies])}  '
+        emoji_r = f'  {"".join(emojies[-self._num_emojies:])}'
+        time_info = f'  |  [{datetime.fromtimestamp(curr.poll_time).strftime("%Y/%m/%d %H:%M:%S")}]'
+        error_info = f'  |  *{curr.error_msg}*' if (not curr.online) else ''
+        # combine into a single message
+        return f'{emoji_l}{status}{emoji_r}{time_info}{error_info}' \
+               f'{qoute}'
+
+    def on_poll(self, curr: ClusterStatus):
+        pass
+
+    def on_first_status(self, curr: ClusterStatus):
+        self._send(self._make_msg(curr))
+
+    def on_changed_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        self._send(self._make_msg(curr))
+
+    def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        if self._update_on_unchanged:
+            self._send(self._make_msg(curr))
+
+
+# ========================================================================= #
+# RANDOM QOUTES                                                             #
+# ========================================================================= #
+
+
+@cachier()
+def _get(url: str):
+    return requests.get(url)
+
+
+def get_all_qoutes(keywords: Sequence[str] = ('failure',)):
+    all_qoutes = set()
+    # load all the qoutes for the different keywords
+    for keyword in keywords:
+        result = _get(f'https://zenquotes.io/keywords/{keyword}')
+        page = bs4.BeautifulSoup(result.content, features="html.parser")
+        qoutes = page.find_all('blockquote', {'class': 'blockquote'})
+        qoutes = [qoute.text for qoute in qoutes]
+        all_qoutes.update(qoutes)
+    # done!
+    return list(all_qoutes)
+
+
+def get_random_qoute(keywords: Sequence[str] = ('failure',)):
+    all_qoutes = get_all_qoutes(keywords=keywords)
+    return random.choice(all_qoutes)
+
+
+# ========================================================================= #
+# LOGIC                                                                     #
+# ========================================================================= #
+
+
+def poll_and_update(
+    notifier: Notifier,
+    artifact_path: str = 'history.json',
+    connection_handler: SshConnectionHandler = None,
+    max_age: int = 60 * 60 * 24,
+):
+    if connection_handler is None:
+        connection_handler = SshConnectionHandler(host=os.environ['CLUSTER_HOST'], user=os.environ['CLUSTER_USER'])
+    # connect to the server and poll the number of nodes
+    with connection_handler as ssh_handler:
+        status = ssh_handler.poll_cluster_status()
+    # get the artefacts from disk, append the polled statuses, and save
+    with ArtefactHandler(artifact_path, max_age=max_age) as artifact_handler:
+        entries = artifact_handler.push(status)
+    # dispatch the notifications
+    notifier.dispatch(entries)
 
 
 # ========================================================================= #
@@ -282,19 +457,27 @@ class DiscordNotifier(ConsoleNotifier):
 
 if __name__ == '__main__':
 
-    def poll_and_update(artifact: str, notifier: Notifier, max_age: int = 60 * 60 * 24):
-        # connect to the server and poll the number of nodes
-        with SshConnectionHandler(host=os.environ['CLUSTER_HOST'], user=os.environ['CLUSTER_USER']) as handler:
-            status = handler.poll_cluster_status()
-        # get the artefacts from disk, append the polled statuses, and save
-        entries = convert_and_drop_invalid_statuses(load_artifact(artifact))
-        entries = append_status(entries, status, max_age=max_age)
-        save_artifact(artifact, [status.to_dict() for status in entries])
-        # dispatch the notifications
-        notifier.dispatch(entries)
+    poll_and_update(
+        notifier=DiscordNotifier(
+            webhook_url=os.environ['DISCORD_WEBHOOK'],
+            username='Cluster Status',
+            avatar_url='https://raw.githubusercontent.com/nmichlo/uploads/main/cluster_avatar.jpg',
+            cluster_name='mscluster0',
+            num_emojies=3,
+            append_qoute=False,
+            update_on_unchanged=False,
+        ),
+        connection_handler=SshConnectionHandler(
+            host=os.environ['CLUSTER_HOST'],
+            user=os.environ['CLUSTER_USER'],
+            port=os.environ.get('CLUSTER_PORT', 22),
+            connect_timeout=10,
+        ),
+        artifact_path='history.json',
+        max_age=60 * 60 * 24,  # 1 day
+    )
 
-    def main():
-        notifier = ConsoleNotifier()
-        poll_and_update('history.json', notifier, max_age=60)
 
-    main()
+# ========================================================================= #
+# END                                                                       #
+# ========================================================================= #
