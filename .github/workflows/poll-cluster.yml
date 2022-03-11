@@ -40,6 +40,7 @@ jobs:
 
     # Run Script & Persist Files
     - name: 'Download Poll History'
+      if: always()
       uses: actions/download-artifact@v3
       with:
         name: poll-history
