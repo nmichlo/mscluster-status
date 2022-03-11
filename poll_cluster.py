@@ -1,10 +1,12 @@
 import json
+import logging
 import os
 import random
 import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
+from pprint import pformat
 from typing import List
 from typing import NoReturn
 from typing import Optional
@@ -16,6 +18,9 @@ import discord.ext.commands
 import discord.ext.tasks
 import fabric
 from paramiko.ssh_exception import SSHException
+
+
+logger = logging.getLogger(__name__)
 
 
 # ========================================================================= #
@@ -166,6 +171,7 @@ class SshConnectionHandler(object):
         try:
             result: fabric.Result = self._client.run('sinfo --summarize')
             # check the result
+            # TODO: authentication errors and the likes should be handled separately!
             if result.failed:
                 raise SSHException(f'sinfo command returned non-zero status code: {repr(result.return_code)}')
             if result.stderr:
@@ -387,12 +393,15 @@ class DiscordNotifier(Notifier):
         pass
 
     def on_first_status(self, curr: ClusterStatus):
+        logger.info(f'started polling, cluster is: {curr.status_msg}')
         self._send(self._make_msg(curr))
 
     def on_changed_status(self, curr: ClusterStatus, prev: ClusterStatus):
         self._send(self._make_msg(curr))
+        logger.info(f'cluster is now: {curr.status_msg}')
 
     def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
+        logger.info(f'no change in cluster status: {curr.status_msg}')
         if self._update_on_unchanged:
             self._send(self._make_msg(curr))
 
@@ -438,9 +447,11 @@ def poll_and_update(
     # connect to the server and poll the number of nodes
     with connection_handler as ssh_handler:
         status = ssh_handler.poll_cluster_status()
+        logger.info(f'Polled Status:\n{pformat(status.to_dict())}')
     # get the artefacts from disk, append the polled statuses, and save
     with ArtefactHandler(artifact_path, max_age=max_age) as artifact_handler:
         entries = artifact_handler.push(status)
+        logger.info(f'History Size: {len(entries)-1}')
     # dispatch the notifications
     notifier.dispatch(entries)
 
@@ -451,6 +462,8 @@ def poll_and_update(
 
 
 if __name__ == '__main__':
+
+    logging.basicConfig(level=logging.INFO)
 
     poll_and_update(
         notifier=DiscordNotifier(

@@ -39,19 +39,11 @@ jobs:
         python -m pip install -r requirements.txt
 
     # Run Script & Persist Files
-#    - name: 'Download Poll History'
-#      uses: actions/download-artifact@v3
-#      continue-on-error: true
-#      with:
-#        name: poll-history
-
     - name: Download Poll History
       uses: dawidd6/action-download-artifact@v2
       with:
-        # github_token: '${{secrets.GITHUB_TOKEN}}'
         workflow: poll-cluster.yml
         name: poll-history
-
     - name: 'Run Script'
       env:
         DISCORD_WEBHOOK: '${{ secrets.DISCORD_WEBHOOK }}'
