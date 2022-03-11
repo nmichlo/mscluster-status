@@ -131,13 +131,17 @@ def parse_sinfo_partitions(sinfo_summary_string: str) -> Tuple[PartitionStatus]:
 
 class SshConnectionHandler(object):
 
-    def __init__(self, host: str, user: str, port: int = 22, connect_timeout: int = 10):
+    def __init__(self, host: str, user: str, port: int = 22, password: str = None, connect_timeout: int = 10):
         self._host = host
         self._user = user
         self._port = port
         self._connect_timeout = connect_timeout
         # ssh client
+        self._connect_kwargs = {}
         self._client: Optional[fabric.Connection] = None
+        # add password
+        if password is not None:
+            self._connect_kwargs['password'] = password
 
     def __enter__(self):
         # initialize the ssh client
@@ -147,6 +151,7 @@ class SshConnectionHandler(object):
             port=self._port,
             connect_timeout=self._connect_timeout,
             config=fabric.Config(overrides=dict(run=dict(hide=True))),
+            connect_kwargs=self._connect_kwargs,
         )
         return self
 
@@ -461,6 +466,7 @@ if __name__ == '__main__':
             host=os.environ['CLUSTER_HOST'],
             user=os.environ['CLUSTER_USER'],
             port=os.environ.get('CLUSTER_PORT', 22),
+            password=os.environ.get('CLUSTER_PASSWORD', None),
             connect_timeout=10,
         ),
         artifact_path='history.json',
