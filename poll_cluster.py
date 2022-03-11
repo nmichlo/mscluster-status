@@ -445,16 +445,6 @@ def get_random_qoute(keywords: Sequence[str] = ('failure',)):
     page = bs4.BeautifulSoup(result.content, features="html.parser")
     qoutes = page.find_all('blockquote', {'class': 'blockquote'})
     qoutes = [qoute.text for qoute in qoutes]
-    # sentiment analysis
-    # | import nltk
-    # | import nltk.sentiment
-    # | nltk.download('vader_lexicon')
-    # | sia = nltk.sentiment.SentimentIntensityAnalyzer()
-    # | # get sentiment
-    # | sentiment = [(text, sia.polarity_scores(text.split(' — ')[0])) for text in qoutes]
-    # | sentiment = sorted(sentiment, key=lambda item: item[1]['compound'])
-    # | for text, scores in sentiment:
-    # |     print(scores['compound'], text)
     # done!
     return random.choice(qoutes)
 
