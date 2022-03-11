@@ -22,8 +22,19 @@ The following environment variables are **optional**:
 - `CLUSTER_PORT`:            (default: 22) The port of the ssh server.
 - `CLUSTER_CONNECT_TIMEOUT`: (default: 10) How long to an attempt is made to establish a connection with the ssh server.
 
-## Note
+## Note On Persisting State
 
 The script produces the file `history.json` in the current working directory which is used to persist
 state between invocations. This file needs to be cached by the github action as an artefact, that subsequent
 runs search for and retrieve.
+
+# Note On Cron
+
+The github cron event is very unreliable. To work around this we use a free cron utility that can
+submit a POST request to a webhook that manually starts the github action.
+- The service we use is [easycron.com](https://www.easycron.com)
+
+Resources:
+- https://upptime.js.org/blog/2021/01/22/github-actions-schedule-not-working/
+- https://docs.github.com/en/rest/guides/getting-started-with-the-rest-api#authentication
+- https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch
