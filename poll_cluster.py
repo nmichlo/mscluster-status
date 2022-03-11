@@ -290,12 +290,16 @@ class Notifier(object):
     def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
         pass
 
+    def on_after_dispatch(self, curr: ClusterStatus, prev: Optional[ClusterStatus]):
+        pass
+
+
     def dispatch(self, entries: List[ClusterStatus]):
         # checks
         if len(entries) < 0:
             raise RuntimeError('This should never happen!')
         # always poll
-        curr = entries[-1]
+        curr, prev = entries[-1], None
         self.on_poll(curr)
         # handle the correct case
         if len(entries) == 1:
@@ -306,6 +310,8 @@ class Notifier(object):
                 self.on_changed_status(curr=curr, prev=prev)
             else:
                 self.on_unchanged_status(curr=curr, prev=prev)
+        # final things
+        self.on_after_dispatch(curr, prev)
 
 
 class ConsoleNotifier(Notifier):
@@ -405,6 +411,10 @@ class DiscordNotifier(Notifier):
         if self._update_on_unchanged:
             self._send(self._make_msg(curr))
 
+    def on_after_dispatch(self, curr: ClusterStatus, prev: Optional[ClusterStatus]):
+        logger.info('Dispatched:')
+        logger.info(f'- curr: {curr}')
+        logger.info(f'- prev: {prev}')
 
 # ========================================================================= #
 # RANDOM QOUTES                                                             #
