@@ -336,17 +336,17 @@ class DiscordNotifier(Notifier):
         webhook_url: str = None,
         username: str = None,
         avatar_url: str = None,
-        cluster_name: str = 'mscluster0',
         num_emojies: int = 3,
         append_qoute: bool = False,
+        append_info: bool = False,
         update_on_unchanged: bool = False,
     ):
         self._webhook_url = os.environ['DISCORD_WEBHOOK'] if (webhook_url is None) else webhook_url
         self._username = username
         self._avatar_url = avatar_url
-        self._cluster_name = cluster_name
         self._num_emojies = num_emojies
         self._append_qoute = append_qoute
+        self._append_info = append_info
         self._update_on_unchanged = update_on_unchanged
         # construct the webhook
         self._webhook = discord.Webhook.from_url(
@@ -370,8 +370,8 @@ class DiscordNotifier(Notifier):
 
     def _make_msg(self, curr: ClusterStatus):
         # get emojis to use
-        online = ['✨', '🌟', '🏆', '🥇', '👍', '🙌', '👏', '🤩', '💃', '🕺', '🌞', '🧃', '🍫', '🍦', '🥧', '🍯', '🎉', '🎊', '🥂', '🍾', '🎈', '🥳', '💪', '🆗', '🆙', '✔️', '💯', '💡', '❤️']
-        offline = ['🃏', '💤', '❗️', '❌', '🚫', '⚠️', '🧨', '💣', '🛠', '🪤', '🏚', '🏗', '🚧', '⛈', '🐋', '🐒', '🙈', '🙉', '🤒', '😴', '🤬', '💀', '🤡', '😡', '🆘', '⛔️', '⁉️', '💔', '🏁']
+        online = ['✨', '🌟', '🏆', '🥇', '✅', '🔋', '👌', '🤙', '👍', '🙌', '👏', '🤞', '🤩', '💃', '🕺', '🌞', '🧃', '🍦', '🍰', '🎉', '🎊', '🎈', '🥳', '💪', '🆗', '🆙', '💯', '🚀', '⏳', '💡', '❤️', '⤴️', '😇', '👼', '🍀', '🤑', '🎁']  # '🔛', '✔️'
+        offline = ['🃏', '💤', '❗️', '❌', '🚫', '⚠️', '🧨', '🛠', '🪤', '🏚', '🏗', '🚧', '⛈', '🐋', '🐒', '🙈', '🙉', '🤒', '😴', '👎', '🤌', '👇', '🤦', '🙆', '😭', '🙃', '😵', '⛑', '💀', '⚰️', '🪦', '🙅', '⤵️', '🥔', '🚑', '🗿', '🧘', '🦤', '🤡', '💩', '🆘', '⛔️', '⁉️', '💔', '🏁']  # '💣'
         # shuffle the emojies
         emojies = online if curr.online else offline
         random.shuffle(emojies)
@@ -379,9 +379,9 @@ class DiscordNotifier(Notifier):
         qoute = ''
         if self._append_qoute:
             try:
-                qoute = get_random_qoute(keywords=('love', 'success', 'happiness', 'life') if online else ('truth', 'pain', 'death'))
-                qoute, author = qoute.split(' — ')
-                qoute = f'\n> *{qoute}*' \
+                text = get_random_qoute(keywords=('love', 'success', 'happiness', 'life') if online else ('truth', 'pain', 'death'))
+                text, author = text.split(' — ')
+                qoute = f'\n> *{text}*' \
                         f'\n> - **{author}**'
             except:
                 pass
@@ -391,9 +391,23 @@ class DiscordNotifier(Notifier):
         emoji_r = f'  {"".join(emojies[-self._num_emojies:])}'
         time_info = f'  |  [{datetime.fromtimestamp(curr.poll_time).strftime("%Y/%m/%d %H:%M:%S")}]'
         error_info = f'  |  *{curr.error_msg}*' if (not curr.online) else ''
+        # get partition info sting
+        partition_info = ''
+        if self._append_info and curr.online and curr.partitions:
+            # format everything
+            table = [(f'{p.name}:', p.status_idle, p.status_alloc, p.status_down, p.status_total) for p in curr.partitions]
+            lengths = [max(len(f'{v}') for v in col) for col in zip(*table)]
+            table = [[f'{v:{l}}' for v, l in zip(row, lengths)] for row in table]
+            # generate the string
+            partitions_str = '\n'.join(f'{n} {i}|{a}|{d}|{t}  # [I|A|D|T]' for n, i, a, d, t in table)
+            partition_info = f'\n```yaml\n{partitions_str}\n```'
         # combine into a single message
-        return f'{emoji_l}{status}{emoji_r}{time_info}{error_info}' \
-               f'{qoute}'
+        msg = f'{emoji_l}{status}{emoji_r}{time_info}{error_info}' \
+               f'{qoute}' \
+               f'{partition_info}'
+        # log the message
+        logger.info('\n' + msg)
+        return msg
 
     def on_poll(self, curr: ClusterStatus):
         pass
@@ -408,8 +422,9 @@ class DiscordNotifier(Notifier):
 
     def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
         logger.info(f'no change in cluster status: {curr.status_msg}')
+        msg = self._make_msg(curr)
         if self._update_on_unchanged:
-            self._send(self._make_msg(curr))
+            self._send(msg)
 
     def on_after_dispatch(self, curr: ClusterStatus, prev: Optional[ClusterStatus]):
         logger.info('Dispatched:')
@@ -421,24 +436,27 @@ class DiscordNotifier(Notifier):
 # ========================================================================= #
 
 
-def get_all_qoutes(keywords: Sequence[str] = ('failure',)):
+def get_random_qoute(keywords: Sequence[str] = ('failure',)):
     import requests
     import bs4
     # load all the qoutes for the different keywords
-    all_qoutes = set()
-    for keyword in keywords:
-        result = requests.get(f'https://zenquotes.io/keywords/{keyword}')
-        page = bs4.BeautifulSoup(result.content, features="html.parser")
-        qoutes = page.find_all('blockquote', {'class': 'blockquote'})
-        qoutes = [qoute.text for qoute in qoutes]
-        all_qoutes.update(qoutes)
+    keyword = random.choice(keywords)
+    result = requests.get(f'https://zenquotes.io/keywords/{keyword}')
+    page = bs4.BeautifulSoup(result.content, features="html.parser")
+    qoutes = page.find_all('blockquote', {'class': 'blockquote'})
+    qoutes = [qoute.text for qoute in qoutes]
+    # sentiment analysis
+    # | import nltk
+    # | import nltk.sentiment
+    # | nltk.download('vader_lexicon')
+    # | sia = nltk.sentiment.SentimentIntensityAnalyzer()
+    # | # get sentiment
+    # | sentiment = [(text, sia.polarity_scores(text.split(' — ')[0])) for text in qoutes]
+    # | sentiment = sorted(sentiment, key=lambda item: item[1]['compound'])
+    # | for text, scores in sentiment:
+    # |     print(scores['compound'], text)
     # done!
-    return list(all_qoutes)
-
-
-def get_random_qoute(keywords: Sequence[str] = ('failure',)):
-    all_qoutes = get_all_qoutes(keywords=keywords)
-    return random.choice(all_qoutes)
+    return random.choice(qoutes)
 
 
 # ========================================================================= #
@@ -471,26 +489,43 @@ def poll_and_update(
 # ========================================================================= #
 
 
+def to_boolean(var: str) -> bool:
+    if isinstance(var, str):
+        var = var.lower()
+        if var in ('', 'false', 'f', 'no', 'n', '0'):
+            return False
+        elif var in ('true', 't', 'yes', 'y', '1'):
+            return True
+        else:
+            raise ValueError(f'Cannot convert value to boolean, got invalid string: {repr(var)}')
+    elif isinstance(var, int):
+        return bool(var)
+    elif isinstance(var, bool):
+        return var
+    else:
+        raise TypeError(f'Cannot convert value to boolean: {repr(var)}, got invalid type: {type(var)}')
+
+
 if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO)
 
     poll_and_update(
         notifier=DiscordNotifier(
-            webhook_url=os.environ['DISCORD_WEBHOOK'],
-            username='Cluster Status',
-            avatar_url='https://raw.githubusercontent.com/nmichlo/uploads/main/cluster_avatar.jpg',
-            cluster_name='mscluster0',
+            webhook_url = os.environ['DISCORD_WEBHOOK'],
+            username    = os.environ.get('DISCORD_USER', 'Cluster Status'),
+            avatar_url  = os.environ.get('DISCORD_IMG', 'https://raw.githubusercontent.com/nmichlo/uploads/main/cluster_avatar.jpg'),
             num_emojies=3,
-            append_qoute=False,
-            update_on_unchanged=False,
+            append_qoute        = to_boolean(os.environ.get('DISCORD_MSG_QUOTE', False)),
+            append_info         = to_boolean(os.environ.get('DISCORD_MSG_INFO', True)),
+            update_on_unchanged = to_boolean(os.environ.get('DISCORD_MSG_ALWAYS', False)),
         ),
         connection_handler=SshConnectionHandler(
             host=os.environ['CLUSTER_HOST'],
             user=os.environ['CLUSTER_USER'],
             port=os.environ.get('CLUSTER_PORT', 22),
             password=os.environ.get('CLUSTER_PASSWORD', None),
-            connect_timeout=10,
+            connect_timeout=int(os.environ.get('CLUSTER_CONNECT_TIMEOUT', 10)),
         ),
         artifact_path='history.json',
         max_age=60 * 60 * 24,  # 1 day
