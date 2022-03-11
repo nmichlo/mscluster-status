@@ -483,7 +483,7 @@ if __name__ == '__main__':
             cluster_name='mscluster0',
             num_emojies=3,
             append_qoute=False,
-            update_on_unchanged=True,
+            update_on_unchanged=False,
         ),
         connection_handler=SshConnectionHandler(
             host=os.environ['CLUSTER_HOST'],
