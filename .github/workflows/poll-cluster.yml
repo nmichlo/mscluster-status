@@ -3,11 +3,12 @@
 name: Poll Cluster
 
 on:
+  workflow_dispatch:
+#  schedule:
+#    - cron: '*/10 * * * *'
   push:
-    branches:    
-      - 'main'
-  schedule:
-    - cron: '*/10 * * * *'
+    branches:
+      - main
 
 jobs:
   deploy:
