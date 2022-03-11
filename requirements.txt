@@ -1,7 +1,7 @@
 py-cord==1.7.3
 fabric==2.6.0
+requests>=2.0.0
 
 # NEEDED FOR QOUTES
 # beautifulsoup4==4.10.0
-# requests>=2.0.0
 # cachier==1.5.4
