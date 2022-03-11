@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import random
@@ -6,14 +5,12 @@ import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
-from pprint import pprint
 from typing import List
 from typing import NoReturn
 from typing import Optional
 from typing import Sequence
 from typing import Tuple
 
-import aiohttp
 import bs4
 import discord  # pip install py-cord
 import discord.ext.commands
@@ -21,7 +18,6 @@ import discord.ext.tasks
 import fabric
 import requests
 from cachier import cachier
-from discord import RequestsWebhookAdapter
 from paramiko.ssh_exception import SSHException
 
 
@@ -464,8 +460,8 @@ if __name__ == '__main__':
             avatar_url='https://raw.githubusercontent.com/nmichlo/uploads/main/cluster_avatar.jpg',
             cluster_name='mscluster0',
             num_emojies=3,
-            append_qoute=False,
-            update_on_unchanged=False,
+            append_qoute=True,
+            update_on_unchanged=True,
         ),
         connection_handler=SshConnectionHandler(
             host=os.environ['CLUSTER_HOST'],
