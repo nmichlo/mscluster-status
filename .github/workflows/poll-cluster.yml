@@ -45,6 +45,10 @@ jobs:
       with:
         name: poll-history
     - name: 'Run Script'
+      env:
+        DISCORD_WEBHOOK: '${{ secrets.DISCORD_WEBHOOK }}'
+        CLUSTER_HOST: '${{ secrets.CLUSTER_HOST }}'
+        CLUSTER_USER: '${{ secrets.CLUSTER_USER }}'
       run: |
         python poll_cluster.py
     - name: 'Upload Artifact'
