@@ -11,13 +11,10 @@ from typing import Optional
 from typing import Sequence
 from typing import Tuple
 
-import bs4
 import discord  # pip install py-cord
 import discord.ext.commands
 import discord.ext.tasks
 import fabric
-import requests
-from cachier import cachier
 from paramiko.ssh_exception import SSHException
 
 
@@ -400,16 +397,13 @@ class DiscordNotifier(Notifier):
 # ========================================================================= #
 
 
-@cachier()
-def _get(url: str):
-    return requests.get(url)
-
-
 def get_all_qoutes(keywords: Sequence[str] = ('failure',)):
-    all_qoutes = set()
+    import requests
+    import bs4
     # load all the qoutes for the different keywords
+    all_qoutes = set()
     for keyword in keywords:
-        result = _get(f'https://zenquotes.io/keywords/{keyword}')
+        result = requests.get(f'https://zenquotes.io/keywords/{keyword}')
         page = bs4.BeautifulSoup(result.content, features="html.parser")
         qoutes = page.find_all('blockquote', {'class': 'blockquote'})
         qoutes = [qoute.text for qoute in qoutes]
@@ -460,7 +454,7 @@ if __name__ == '__main__':
             avatar_url='https://raw.githubusercontent.com/nmichlo/uploads/main/cluster_avatar.jpg',
             cluster_name='mscluster0',
             num_emojies=3,
-            append_qoute=True,
+            append_qoute=False,
             update_on_unchanged=True,
         ),
         connection_handler=SshConnectionHandler(
