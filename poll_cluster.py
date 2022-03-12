@@ -136,11 +136,20 @@ def parse_sinfo_partitions(sinfo_summary_string: str) -> Tuple[PartitionStatus]:
 
 class SshConnectionHandler(object):
 
-    def __init__(self, host: str, user: str, port: int = 22, password: str = None, connect_timeout: int = 10):
+    def __init__(
+        self,
+        host: str,
+        user: str,
+        port: int = 22,
+        password: str = None,
+        connect_timeout: int = 10,
+        num_retries: int = 5,
+    ):
         self._host = host
         self._user = user
         self._port = port
         self._connect_timeout = connect_timeout
+        self._num_retries = num_retries
         # ssh client
         self._connect_kwargs = {}
         self._client: Optional[fabric.Connection] = None
@@ -166,33 +175,39 @@ class SshConnectionHandler(object):
         return self
 
     def poll_cluster_status(self) -> ClusterStatus:
-        poll_time = Now()
-        # try poll for the cluster status
-        try:
-            result: fabric.Result = self._client.run('sinfo --summarize')
-            # check the result
-            # TODO: authentication errors and the likes should be handled separately!
-            if result.failed:
-                raise SSHException(f'sinfo command returned non-zero status code: {repr(result.return_code)}')
-            if result.stderr:
-                raise SSHException(f'sinfo command returned error text: {repr(result.stderr)}')
-            # parse the standard output
-            partitions = parse_sinfo_partitions(result.stdout)
-            # make the cluster status
-            return ClusterStatus(
-                partitions=tuple(partitions),
-                poll_time=poll_time.time,
-                online=True,
-                error_msg=None,
-            )
-        except Exception as e:
-            # we failed to poll the cluster status
-            return ClusterStatus(
-                partitions=None,
-                poll_time=poll_time.time,
-                online=False,
-                error_msg=str(e),
-            )
+        poll_time, error = Now(), 'unknown error'
+        # try polling multiple times, if we fail each time then send a message!
+        for i in range(self._num_retries):
+            poll_time = Now()
+            # try poll for the cluster status
+            try:
+                result: fabric.Result = self._client.run('sinfo --summarize')
+                # check the result
+                # TODO: authentication errors and the likes should be handled separately!
+                if result.failed:
+                    raise SSHException(f'sinfo command returned non-zero status code: {repr(result.return_code)}')
+                if result.stderr:
+                    raise SSHException(f'sinfo command returned error text: {repr(result.stderr)}')
+                # parse the standard output
+                partitions = parse_sinfo_partitions(result.stdout)
+                # make the cluster status
+                return ClusterStatus(
+                    partitions=tuple(partitions),
+                    poll_time=poll_time.time,
+                    online=True,
+                    error_msg=None,
+                )
+            except Exception as e:
+                # we failed to poll the cluster status
+                logger.error(f'failed to poll cluster status, try {i+1} of {self._num_retries}: {str(e)}')
+                error = e
+        # we failed to poll the cluster status multiple times!
+        return ClusterStatus(
+            partitions=None,
+            poll_time=poll_time.time,
+            online=False,
+            error_msg=str(error),
+        )
 
 
 # ========================================================================= #
@@ -337,17 +352,21 @@ class DiscordNotifier(Notifier):
         username: str = None,
         avatar_url: str = None,
         num_emojies: int = 3,
+        static_emojis: bool = False,
         append_qoute: bool = False,
         append_info: bool = False,
         update_on_unchanged: bool = False,
+        offline: bool = False,
     ):
         self._webhook_url = os.environ['DISCORD_WEBHOOK'] if (webhook_url is None) else webhook_url
         self._username = username
         self._avatar_url = avatar_url
         self._num_emojies = num_emojies
+        self._static_emojis = static_emojis
         self._append_qoute = append_qoute
         self._append_info = append_info
         self._update_on_unchanged = update_on_unchanged
+        self._offline = offline
         # construct the webhook
         self._webhook = discord.Webhook.from_url(
             url=self._webhook_url,
@@ -355,6 +374,8 @@ class DiscordNotifier(Notifier):
         )
 
     def _send(self, content: str):
+        if self._offline:
+            return
         self._webhook.send(
             content=content,
             wait=True,
@@ -372,6 +393,7 @@ class DiscordNotifier(Notifier):
         # get emojis to use
         online = ['✨', '🌟', '🏆', '🥇', '✅', '🔋', '👌', '🤙', '👍', '🙌', '👏', '🤞', '🤩', '💃', '🕺', '🌞', '🧃', '🍦', '🍰', '🎉', '🎊', '🎈', '🥳', '💪', '🆗', '🆙', '💯', '🚀', '⏳', '💡', '❤️', '⤴️', '😇', '👼', '🍀', '🤑', '🎁']  # '🔛', '✔️'
         offline = ['🃏', '💤', '❗️', '❌', '🚫', '⚠️', '🧨', '🛠', '🪤', '🏚', '🏗', '🚧', '⛈', '🐋', '🐒', '🙈', '🙉', '🤒', '😴', '👎', '🤌', '👇', '🤦', '🙆', '😭', '🙃', '😵', '⛑', '💀', '⚰️', '🪦', '🙅', '⤵️', '🥔', '🚑', '🗿', '🧘', '🦤', '🤡', '💩', '🆘', '⛔️', '⁉️', '💔', '🏁']  # '💣'
+        emoji = '🚀' if curr.online else '💀'
         # shuffle the emojies
         emojies = online if curr.online else offline
         random.shuffle(emojies)
@@ -387,8 +409,8 @@ class DiscordNotifier(Notifier):
                 pass
         # generate the string!
         status = f'**{curr.status.upper()}**'
-        emoji_l = f'{"".join(emojies[:self._num_emojies])}  '
-        emoji_r = f'  {"".join(emojies[-self._num_emojies:])}'
+        emoji_l = (f'{"".join(emojies[:self._num_emojies])}  ' if self._num_emojies > 0 else '') if (not self._static_emojis) else f'{emoji}  '
+        emoji_r = (f'  {"".join(emojies[-self._num_emojies:])}' if self._num_emojies > 0 else '') if (not self._static_emojis) else f''
         time_info = f'  |  [{datetime.fromtimestamp(curr.poll_time).strftime("%Y/%m/%d %H:%M:%S")}]'
         error_info = f'  |  *{curr.error_msg}*' if (not curr.online) else ''
         # get partition info sting
@@ -515,10 +537,12 @@ if __name__ == '__main__':
             webhook_url = os.environ['DISCORD_WEBHOOK'],
             username    = os.environ.get('DISCORD_USER', 'Cluster Status'),
             avatar_url  = os.environ.get('DISCORD_IMG', 'https://raw.githubusercontent.com/nmichlo/uploads/main/cluster_avatar.jpg'),
-            num_emojies=3,
-            append_qoute        = to_boolean(os.environ.get('DISCORD_MSG_QUOTE', False)),
-            append_info         = to_boolean(os.environ.get('DISCORD_MSG_INFO', True)),
+            num_emojies = int(os.environ.get('DISCORD_MSG_EMOJIS', 0)),
+            static_emojis       = to_boolean(os.environ.get('DISCORD_MSG_STATIC', True)),
+            append_qoute        = to_boolean(os.environ.get('DISCORD_MSG_QUOTE',  False)),
+            append_info         = to_boolean(os.environ.get('DISCORD_MSG_INFO',   False)),
             update_on_unchanged = to_boolean(os.environ.get('DISCORD_MSG_ALWAYS', False)),
+            offline             = to_boolean(os.environ.get('DISCORD_DRY_RUN',    False)),
         ),
         connection_handler=SshConnectionHandler(
             host=os.environ['CLUSTER_HOST'],
@@ -526,6 +550,7 @@ if __name__ == '__main__':
             port=os.environ.get('CLUSTER_PORT', 22),
             password=os.environ.get('CLUSTER_PASSWORD', None),
             connect_timeout=int(os.environ.get('CLUSTER_CONNECT_TIMEOUT', 10)),
+            num_retries=int(os.environ.get('CLUSTER_CONNECT_RETRIES', 5)),
         ),
         artifact_path='history.json',
         max_age=60 * 60 * 24,  # 1 day
