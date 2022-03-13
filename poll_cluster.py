@@ -387,16 +387,16 @@ class _BaseDiscordNotifier(Notifier):
 
     def on_first_status(self, curr: ClusterStatus):
         logger.info(f'started polling, cluster is: {curr.status_msg}')
-        self._dispatch_update(curr)
+        self._send_update(curr)
 
     def on_changed_status(self, curr: ClusterStatus, prev: ClusterStatus):
         logger.info(f'cluster is now: {curr.status_msg}')
-        self._dispatch_update(curr)
+        self._send_update(curr)
 
     def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
         logger.info(f'no change in cluster status: {curr.status_msg}')
         if self._update_on_unchanged:
-            self._dispatch_update(curr)
+            self._send_update(curr)
 
     def on_after_dispatch(self, curr: ClusterStatus, prev: Optional[ClusterStatus]):
         logger.info('Dispatched:')
@@ -405,12 +405,8 @@ class _BaseDiscordNotifier(Notifier):
         logger.info(f'Discord Message:\n{self._make_msg(curr)}')
         logger.info(f'Discord Channel Name:\n{self._make_name(curr)}')
 
-    def _dispatch_update(self, curr: ClusterStatus):
-        if self._offline:
-            return
-        self._send_update(curr)
-
     def _send_update(self, curr: ClusterStatus):
+        # MAKE SURE TO CHECK self._offline
         raise NotImplementedError
 
 
@@ -449,6 +445,8 @@ class WebhookDiscordNotifier(_BaseDiscordNotifier):
         )
 
     def _send_update(self, curr: ClusterStatus):
+        if self._offline:
+            return
         self._webhook.send(
             content=self._make_msg(curr),
             wait=True,
@@ -500,19 +498,31 @@ class BotDiscordNotifier(_BaseDiscordNotifier):
         self._webhook_name = webhook_name
         self._timeout = timeout
         self._attempts = attempts
+        # temp message
+        self._do_send_message: bool = False
 
     def _send_update(self, curr: ClusterStatus):
-        send_message_and_update_channel(
-            bot_token=self._bot_token,
-            channel_id=self._channel_id,
-            msg_content=self._make_msg(curr),
-            msg_username=self._username.get(curr.online),
-            msg_avatar_url=self._avatar_url.get(curr.online),
-            new_channel_name=self._make_name(curr),
-            webhook_name=None,
-            timeout=self._timeout,
-            attempts=self._attempts,
-        )
+        self._do_send_message = True
+
+    def on_after_dispatch(self, curr: ClusterStatus, prev: Optional[ClusterStatus]):
+        if not self._offline:
+            # we only send a message if _send_update(...) was called,
+            # but we always update the channel name!
+            send_message_and_update_channel(
+                bot_token=self._bot_token,
+                channel_id=self._channel_id,
+                msg_content=self._make_msg(curr) if self._do_send_message else None,
+                msg_username=self._username.get(curr.online),
+                msg_avatar_url=self._avatar_url.get(curr.online),
+                new_channel_name=self._make_name(curr),
+                webhook_name=None,
+                timeout=self._timeout,
+                attempts=self._attempts,
+            )
+        # reset the temp message
+        self._do_send_message = False
+        # print everything!
+        super().on_after_dispatch(curr, prev)
 
 
 # ========================================================================= #
@@ -525,10 +535,10 @@ def send_message_and_update_channel(
     bot_token: str,
     channel_id: int,
     # MSG SETTINGS
-    msg_content: str,
-    msg_username: str = 'Cluster Status',
-    msg_avatar_url: str = None,
-    new_channel_name: str = None,
+    msg_content: Optional[str],
+    msg_username: Optional[str] = 'Cluster Status',
+    msg_avatar_url: Optional[str] = None,
+    new_channel_name: Optional[str] = None,
     # BOT SETTINGS
     webhook_name: Optional[str] = None,
     timeout: float = 30,
@@ -536,6 +546,11 @@ def send_message_and_update_channel(
 ):
     import asyncio
     import discord
+
+    # warn if we are doing nothing
+    if (msg_content is None) and (new_channel_name is None):
+        logger.warning(f'no message or channel name to update!')
+        return
 
     # defaults
     if webhook_name is None:
@@ -546,36 +561,37 @@ def send_message_and_update_channel(
 
     @client.event
     async def on_ready():
+        # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
         # GET CHANNEL:
         logger.info('- getting channel')
         channel = client.get_channel(channel_id)
         assert isinstance(channel, discord.channel.TextChannel)
+        # - edit the channel
+        if new_channel_name is not None:
+            logger.info(f'- editing channel: {repr(new_channel_name)}')
+            await wait(channel.edit(name=new_channel_name))
         # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
-        # GET WEBHOOK TO SEND MESSAGE:
-        logger.info('- getting webhooks')
-        webhooks = await channel.webhooks()
-        # - linear search for webhook, otherwise create it!
-        webhook: Optional[discord.Webhook] = None
-        for wh in webhooks:
-            if wh.name == webhook_name:
-                webhook = wh
-                break
-        # - create webhook if it does not exist
-        if webhook is None:
-            logger.info(f'- creating webhook: {repr(webhook_name)}')
-            webhook = await channel.create_webhook(name=webhook_name)
-        # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
-        # SEND THE INFORMATION:
         if msg_content is not None:
+            # GET WEBHOOK TO SEND MESSAGE:
+            logger.info('- getting webhooks')
+            webhooks = await channel.webhooks()
+            # - linear search for webhook, otherwise create it!
+            webhook: Optional[discord.Webhook] = None
+            for wh in webhooks:
+                if wh.name == webhook_name:
+                    webhook = wh
+                    break
+            # - create webhook if it does not exist
+            if webhook is None:
+                logger.info(f'- creating webhook: {repr(webhook_name)}')
+                webhook = await channel.create_webhook(name=webhook_name)
+            # - send the message
             logger.info(f'- sending message: {repr(msg_content)}')
             await wait(webhook.send(
                 content=msg_content,
                 username=msg_username,
                 avatar_url=msg_avatar_url
             ))
-        if new_channel_name is not None:
-            logger.info(f'- editing channel: {repr(new_channel_name)}')
-            await wait(channel.edit(name=new_channel_name))
         # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
         await client.close()
 
