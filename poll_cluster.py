@@ -5,6 +5,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pprint import pformat
 from typing import Generic
 from typing import List
@@ -252,7 +253,7 @@ class ArtefactHandler(object):
                 with open(self._path, 'r') as fp:
                     raw_entries = json.load(fp)
             except Exception as e:
-                print('Failed to load artifact:')
+                logger.warning(f'Failed to load artifact: {repr(self._path)}, reason: {e}')
         # convert to lists of objects and append the new status
         entries = []
         for status in raw_entries:
@@ -342,14 +343,11 @@ class OnOffObj(Generic[T]):
             return OnOffObj(obj, obj)
 
 
-class DiscordNotifier(Notifier):
+class _BaseDiscordNotifier(Notifier):
 
     def __init__(
         self,
-        webhook_url: str = None,
         # formatting
-        username: Union[str, Tuple[str, str]] = 'Bot',
-        avatar_url: Union[str, Tuple[str, str]] = None,
         status_emoji: Union[str, Tuple[str, str]] = ('🌞', '⛈'),
         channel_name: Union[str, Tuple[str, str]] = None,
         # flags
@@ -357,55 +355,15 @@ class DiscordNotifier(Notifier):
         update_on_unchanged: bool = False,
         offline: bool = False,
     ):
-        self._webhook_url = os.environ['DISCORD_WEBHOOK'] if (webhook_url is None) else webhook_url
         # status
-        self._username = OnOffObj.make(username)
-        self._avatar_url = OnOffObj.make(avatar_url)
         self._status_emoji = OnOffObj.make(status_emoji)
         self._channel_name = OnOffObj.make(channel_name)
         # flags
         self._append_info = append_info
         self._update_on_unchanged = update_on_unchanged
         self._offline = offline
-        # construct the webhook
-        self._webhook = discord.Webhook.from_url(
-            url=self._webhook_url,
-            adapter=discord.RequestsWebhookAdapter(),
-        )
 
-    def _send_msg(self, curr: ClusterStatus, content: str):
-        if self._offline:
-            return
-        self._webhook.send(
-            content=content,
-            wait=True,
-            username=self._username.get(curr.online),
-            avatar_url=self._avatar_url.get(curr.online),
-            tts=False,
-            file=None,
-            files=None,
-            embed=None,
-            embeds=None,
-            allowed_mentions=None,
-        )
-
-    def _try_send_channel_name(self, curr: ClusterStatus):
-        name = self._channel_name.get(curr.online)
-        if name is not None:
-            try:
-                from discord import TextChannel
-                channel: TextChannel = self._webhook.channel
-                channel.edit(name=name)
-            except Exception as e:
-                logger.error(f'Failed to edit channel name: {str(e)}')
-        else:
-            logger.info(f'Skipped updating channel name, no name given!')
-
-    def _send_update(self, curr: ClusterStatus):
-        self._send_msg(curr=curr, content=self._make_msg(curr))
-        self._try_send_channel_name(curr=curr)
-
-    def _make_msg(self, curr: ClusterStatus):
+    def _make_msg(self, curr: ClusterStatus) -> Optional[str]:
         # get variables
         emoji  = self._status_emoji.get(curr.online)
         status = curr.status.upper()
@@ -424,24 +382,228 @@ class DiscordNotifier(Notifier):
         # combine into a single message
         return f'{emoji}  **{status}**  |  {polled}{err}{info}'
 
+    def _make_name(self, curr: ClusterStatus) -> Optional[str]:
+        return self._channel_name.get(curr.online)
+
     def on_first_status(self, curr: ClusterStatus):
         logger.info(f'started polling, cluster is: {curr.status_msg}')
-        self._send_update(curr)
+        self._dispatch_update(curr)
 
     def on_changed_status(self, curr: ClusterStatus, prev: ClusterStatus):
         logger.info(f'cluster is now: {curr.status_msg}')
-        self._send_update(curr)
+        self._dispatch_update(curr)
 
     def on_unchanged_status(self, curr: ClusterStatus, prev: ClusterStatus):
         logger.info(f'no change in cluster status: {curr.status_msg}')
         if self._update_on_unchanged:
-            self._send_update(curr)
+            self._dispatch_update(curr)
 
     def on_after_dispatch(self, curr: ClusterStatus, prev: Optional[ClusterStatus]):
         logger.info('Dispatched:')
         logger.info(f'- curr: {curr}')
         logger.info(f'- prev: {prev}')
         logger.info(f'Discord Message:\n{self._make_msg(curr)}')
+        logger.info(f'Discord Channel Name:\n{self._make_name(curr)}')
+
+    def _dispatch_update(self, curr: ClusterStatus):
+        if self._offline:
+            return
+        self._send_update(curr)
+
+    def _send_update(self, curr: ClusterStatus):
+        raise NotImplementedError
+
+
+class WebhookDiscordNotifier(_BaseDiscordNotifier):
+
+    def __init__(
+        self,
+        webhook_url: str = None,
+        # formatting
+        username: Union[str, Tuple[str, str]] = 'Cluster Status',
+        avatar_url: Union[str, Tuple[str, str]] = None,
+        status_emoji: Union[str, Tuple[str, str]] = ('🌞', '⛈'),
+        channel_name: Union[str, Tuple[str, str]] = None,
+        # flags
+        append_info: bool = False,
+        update_on_unchanged: bool = False,
+        offline: bool = False,
+    ):
+        super().__init__(
+            status_emoji=status_emoji,
+            channel_name=channel_name,
+            append_info=append_info,
+            update_on_unchanged=update_on_unchanged,
+            offline=offline,
+        )
+        # warn if channel name is specified, we cannot change it!
+        if (self._channel_name.val_online is not None) or (self._channel_name.val_offline is not None):
+            logger.warning(f'cannot change channel name with: {WebhookDiscordNotifier.__name__}')
+        # formatting
+        self._username = OnOffObj.make(username)
+        self._avatar_url = OnOffObj.make(avatar_url)
+        # construct the webhook
+        self._webhook = discord.Webhook.from_url(
+            url=os.environ['DISCORD_WEBHOOK'] if (webhook_url is None) else webhook_url,
+            adapter=discord.RequestsWebhookAdapter(),
+        )
+
+    def _send_update(self, curr: ClusterStatus):
+        self._webhook.send(
+            content=self._make_msg(curr),
+            wait=True,
+            username=self._username.get(curr.online),
+            avatar_url=self._avatar_url.get(curr.online),
+            tts=False,
+            file=None,
+            files=None,
+            embed=None,
+            embeds=None,
+            allowed_mentions=None,
+        )
+
+
+class BotDiscordNotifier(_BaseDiscordNotifier):
+
+    def __init__(
+        self,
+        # BOT SETTINGS
+        bot_token: str,
+        channel_id: int,
+        # formatting
+        username: Union[str, Tuple[str, str]] = 'Cluster Status',
+        avatar_url: Union[str, Tuple[str, str]] = None,
+        status_emoji: Union[str, Tuple[str, str]] = ('🌞', '⛈'),
+        channel_name: Union[str, Tuple[str, str]] = None,
+        # flags
+        append_info: bool = False,
+        update_on_unchanged: bool = False,
+        offline: bool = False,
+        # BOT SETTINGS
+        webhook_name: Optional[str] = None,
+        timeout: float = 30,
+        attempts: int = 1,
+    ):
+        super().__init__(
+            status_emoji=status_emoji,
+            channel_name=channel_name,
+            append_info=append_info,
+            update_on_unchanged=update_on_unchanged,
+            offline=offline,
+        )
+        # formatting
+        self._username = OnOffObj.make(username)
+        self._avatar_url = OnOffObj.make(avatar_url)
+        # bot
+        self._bot_token = bot_token
+        self._channel_id = channel_id
+        self._webhook_name = webhook_name
+        self._timeout = timeout
+        self._attempts = attempts
+
+    def _send_update(self, curr: ClusterStatus):
+        send_message_and_update_channel(
+            bot_token=self._bot_token,
+            channel_id=self._channel_id,
+            msg_content=self._make_msg(curr),
+            msg_username=self._username.get(curr.online),
+            msg_avatar_url=self._avatar_url.get(curr.online),
+            new_channel_name=self._make_name(curr),
+            webhook_name=None,
+            timeout=self._timeout,
+            attempts=self._attempts,
+        )
+
+
+# ========================================================================= #
+# DISCORD BOT                                                               #
+# ========================================================================= #
+
+
+def send_message_and_update_channel(
+    # BOT SETTINGS
+    bot_token: str,
+    channel_id: int,
+    # MSG SETTINGS
+    msg_content: str,
+    msg_username: str = 'Cluster Status',
+    msg_avatar_url: str = None,
+    new_channel_name: str = None,
+    # BOT SETTINGS
+    webhook_name: Optional[str] = None,
+    timeout: float = 30,
+    attempts: int = 1,
+):
+    import asyncio
+    import discord
+
+    # defaults
+    if webhook_name is None:
+        webhook_name = '[BOT] Cluster Status Hook [DO-NOT-EDIT]'
+
+    # construct bot
+    client = discord.Client()
+
+    @client.event
+    async def on_ready():
+        # GET CHANNEL:
+        logger.info('- getting channel')
+        channel = client.get_channel(channel_id)
+        assert isinstance(channel, discord.channel.TextChannel)
+        # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
+        # GET WEBHOOK TO SEND MESSAGE:
+        logger.info('- getting webhooks')
+        webhooks = await channel.webhooks()
+        # - linear search for webhook, otherwise create it!
+        webhook: Optional[discord.Webhook] = None
+        for wh in webhooks:
+            if wh.name == webhook_name:
+                webhook = wh
+                break
+        # - create webhook if it does not exist
+        if webhook is None:
+            logger.info(f'- creating webhook: {repr(webhook_name)}')
+            webhook = await channel.create_webhook(name=webhook_name)
+        # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
+        # SEND THE INFORMATION:
+        if msg_content is not None:
+            logger.info(f'- sending message: {repr(msg_content)}')
+            await wait(webhook.send(
+                content=msg_content,
+                username=msg_username,
+                avatar_url=msg_avatar_url
+            ))
+        if new_channel_name is not None:
+            logger.info(f'- editing channel: {repr(new_channel_name)}')
+            await wait(channel.edit(name=new_channel_name))
+        # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
+        await client.close()
+
+    # helper!
+    async def wait(future):
+        for i in range(attempts):
+            try:
+                await asyncio.wait_for(future, timeout=timeout)
+                break
+            except asyncio.TimeoutError as e:
+                logger.warning(f'failed attempt {i + 1} of {attempts}: {str(e)}')
+
+    # entrypoint!
+    client.run(bot_token)
+
+
+def print_channel_ids(bot_token: str):
+    import discord
+    client = discord.Client()
+    @client.event
+    async def on_ready():
+        for guild in client.guilds:
+            guild: discord.Guild
+            print(guild.id, guild)
+            for channel in guild.channels:
+                print('-', type(channel).__name__, channel.id, channel)
+        await client.close()
+    client.run(bot_token)
 
 
 # ========================================================================= #
@@ -493,11 +655,31 @@ def to_boolean(var: str) -> bool:
 
 if __name__ == '__main__':
 
+    # add bot to server: https://discord.com/api/oauth2/authorize?client_id=951600441924419614&permissions=9126882384&scope=bot
     logging.basicConfig(level=logging.INFO)
 
+    # print_channel_ids(os.environ['DISCORD_BOT_TOKEN'])
+    # exit(1)
+
+    # choose update method!
+    if ('DISCORD_BOT_TOKEN' in os.environ) or ('DISCORD_BOT_CHANNEL_ID' in os.environ):
+        notifier_cls = partial(
+            BotDiscordNotifier,
+            bot_token=os.environ['DISCORD_BOT_TOKEN'],
+            channel_id=int(os.environ['DISCORD_BOT_CHANNEL_ID']),
+            webhook_name=os.environ.get('DISCORD_BOT_WEBHOOK_NAME', None),
+            timeout=os.environ.get('DISCORD_BOT_TIMEOUT', 30),
+        )
+    else:
+        notifier_cls = partial(
+            WebhookDiscordNotifier,
+            webhook_url=os.environ['DISCORD_WEBHOOK'],
+        )
+        raise RuntimeError('webhook has been disabled!')
+
+    # poll and update discord!
     poll_and_update(
-        notifier=DiscordNotifier(
-            webhook_url = os.environ['DISCORD_WEBHOOK'],
+        notifier=notifier_cls(
             username=(
                 os.environ.get('DISCORD_USER_ON', 'Cluster Status'),
                 os.environ.get('DISCORD_USER_OFF', 'Cluster Status'),
@@ -511,8 +693,8 @@ if __name__ == '__main__':
                 os.environ.get('DISCORD_EMOJI_OFF', '⛈'),
             ),
             channel_name=(
-                'status 🌞',
-                'status ⛈',
+                'cluster-status-🌞',
+                'cluster-status-⛈',
             ),
             append_info         = to_boolean(os.environ.get('DISCORD_MSG_INFO',   True)),
             update_on_unchanged = to_boolean(os.environ.get('DISCORD_MSG_ALWAYS', False)),

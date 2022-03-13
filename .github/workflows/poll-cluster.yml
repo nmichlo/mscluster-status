@@ -48,6 +48,8 @@ jobs:
         name: poll-history
     - name: 'Run Script'
       env:
+        DISCORD_BOT_TOKEN: '${{ secrets.DISCORD_BOT_TOKEN }}'
+        DISCORD_BOT_CHANNEL_ID: '${{ secrets.DISCORD_BOT_CHANNEL_ID }}'
         DISCORD_WEBHOOK: '${{ secrets.DISCORD_WEBHOOK }}'
         CLUSTER_HOST: '${{ secrets.CLUSTER_HOST }}'
         CLUSTER_USER: '${{ secrets.CLUSTER_USER }}'
