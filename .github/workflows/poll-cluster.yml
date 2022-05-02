@@ -42,6 +42,7 @@ jobs:
     # Run Script & Persist Files
     - name: Download Poll History
       uses: dawidd6/action-download-artifact@v2
+      continue-on-error: true
       with:
         workflow: poll-cluster.yml
         name: poll-history
