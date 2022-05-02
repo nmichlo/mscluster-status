@@ -28,13 +28,21 @@ The script produces the file `history.json` in the current working directory whi
 state between invocations. This file needs to be cached by the github action as an artefact, that subsequent
 runs search for and retrieve.
 
-# Note On Cron
+# Note On Cron Polling
 
-The github cron event is very unreliable. To work around this we use a free cron utility that can
+The github cron event is very unreliable. To work around this we use AWS to
 submit a POST request to a webhook that manually starts the github action.
-- The service we use is [easycron.com](https://www.easycron.com)
+- https://us-east-1.console.aws.amazon.com/lambda/home?region=us-east-1#/functions
+
+The AWS Lambda is triggered by an AWS EventBridge Rule:
+- https://us-east-1.console.aws.amazon.com/events/home?region=us-east-1#/rules
 
 Resources:
 - https://upptime.js.org/blog/2021/01/22/github-actions-schedule-not-working/
 - https://docs.github.com/en/rest/guides/getting-started-with-the-rest-api#authentication
 - https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch
+
+# Note On Cron Deletion
+There is no easy way to delete action runs
+- We use the github api to find and delete all but the 10 newest runs using AWS, with a similar setup to
+  the above, except that we run it once a day at midnight GMT.
