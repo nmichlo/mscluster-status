@@ -138,7 +138,7 @@ def lambda_handler(event, context):
         time_msg = time_poll if (last_msg is None) else last_msg.created_at.astimezone(tz)
 
         # create the message
-        msg_time = time_poll.strftime("[%Y/%m/%d %H:%M:%S _GMT+2_]")
+        msg_time = time_poll.strftime("[%Y-%m-%d %H:%M _GMT+2_]")
         msg_delta = _fmt_timedelta(delta=time_poll - time_msg)
         msg_content = f'{bot_emoji}  **{bot_status}**  |  Duration: **{msg_delta}**  {msg_time}\n```yaml\n{poll_string}\n```'
 
