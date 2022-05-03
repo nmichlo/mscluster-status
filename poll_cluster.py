@@ -561,6 +561,12 @@ def send_message_and_update_channel(
 
     @client.event
     async def on_ready():
+        try:
+            await asyncio.wait_for(_on_ready(), timeout=120)
+        except asyncio.TimeoutError as e:
+            logger.warning(f'discord update failed! {e}')
+
+    async def _on_ready():
         # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
         # GET CHANNEL:
         logger.info('- getting channel')
