@@ -4,6 +4,10 @@ import os
 import time
 
 import datetime
+from collections import namedtuple
+from typing import Sequence
+from typing import Tuple
+
 import dateutil.tz
 from typing import Optional
 
@@ -79,6 +83,10 @@ def lambda_handler(event, context):
     bot_emoji        = _DISCORD_EMOJI_ON        if poll_success else _DISCORD_EMOJI_OFF
     bot_channel_name = _DISCORD_CHANNEL_NAME_ON if poll_success else _DISCORD_CHANNEL_NAME_OFF
     bot_status       = "ONLINE"                 if poll_success else "OFFLINE"
+
+    # - prettify the sinfo string
+    if poll_success:
+        poll_string = fmt_sinfo_partitions(poll_string)
 
     # ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ #
     # DISCORD:
@@ -202,6 +210,48 @@ def _poll_cluster_status(client: fabric.Connection, num_retries: int = 5) -> (bo
             error = e
     # we failed to poll the cluster status multiple times!
     return False, str(error), poll_time
+
+
+PartitionInfo = namedtuple('PartitionInfo', ['name', 'status', 'limit', 'nodelist', 'alloc', 'idle', 'down', 'total'])
+
+
+def _parse_sinfo_partitions(sinfo_summary_string: str) -> Tuple[PartitionInfo]:
+    """
+    EXAMPLE:
+        PARTITION AVAIL  TIMELIMIT   NODES(A/I/O/T)  NODELIST
+        batch*       up 3-00:00:00       22/0/26/48  mscluster[11-58]
+        biggpu       up 3-00:00:00          1/2/0/3  mscluster[10,59-60]
+        stampede     up 3-00:00:00        35/1/4/40  mscluster[61-100]
+    """
+    # parse the lines
+    (heading, *rows) = (row.strip() for row in sinfo_summary_string.splitlines() if row.strip())
+    # return the status codes
+    assert all(word in heading for word in ['PARTITION', 'AVAIL', 'TIMELIMIT', 'NODES(A/I/O/T)', 'NODELIST'])
+    # parse the statuses
+    partitions = []
+    for row in rows:
+        partition, avail, timelimit, _nodes, nodelist = [seg for seg in row.split(' ') if seg]
+        # update the values
+        partition = partition.rstrip('*')
+        nodes_alloc, nodes_idle, nodes_down, nodes_total = _nodes.split('/')
+        # store the partitions
+        partitions.append(PartitionInfo(name=partition, status=avail, limit=timelimit, nodelist=nodelist, alloc=nodes_alloc, idle=nodes_idle, down=nodes_down, total=nodes_total))
+    # generate the formatted table
+    return tuple(partitions)
+
+
+def fmt_sinfo_partitions(sinfo_summary_string: str) -> str:
+    try:
+        partitions = _parse_sinfo_partitions(sinfo_summary_string)
+        # get the maximum lengths
+        l = PartitionInfo(*[max(map(len, col)) for col in zip(*partitions)])
+        # generate the output string
+        return '\n'.join(
+            f'{p.name+":":{l.name+1}} {p.idle:>{l.idle}}|{p.alloc:>{l.alloc}}|{p.down:>{l.down}}|{p.total:>{l.total}}  # [I|A|D|T]  ({p.status})'
+            for p in partitions
+        )
+    except:
+        return f'>>> failed to parse sinfo string, got:\n{sinfo_summary_string}'
 
 
 # ========================================================================= #
