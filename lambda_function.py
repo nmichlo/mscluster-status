@@ -247,7 +247,7 @@ def fmt_sinfo_partitions(sinfo_summary_string: str) -> str:
         l = PartitionInfo(*[max(map(len, col)) for col in zip(*partitions)])
         # generate the output string
         return '\n'.join(
-            f'{p.name+":":{l.name+1}} {p.idle:>{l.idle}}|{p.alloc:>{l.alloc}}|{p.down:>{l.down}}|{p.total:>{l.total}}  # [I|A|D|T]  ({p.status})'
+            f'{p.name+":":{l.name+1}} {p.idle:>{l.idle}}|{p.alloc:>{l.alloc}}|{p.down:>{l.down}}|{p.total:>{l.total}}  # [✓︎|✗|☠|⅀]  ({p.status})'
             for p in partitions
         )
     except:
