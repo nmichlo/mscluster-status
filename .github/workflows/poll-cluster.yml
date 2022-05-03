@@ -21,7 +21,7 @@ jobs:
     - name: 'Set up Python'
       uses: actions/setup-python@v2
       with:
-        python-version: '3.9'
+        python-version: '3.10'
 
     # Install Deps
     - name: 'Get Pip Cache Dir'
@@ -39,25 +39,13 @@ jobs:
       run: |
         python -m pip install -r requirements.txt
 
-    # Run Script & Persist Files
-    - name: Download Poll History
-      uses: dawidd6/action-download-artifact@v2
-      continue-on-error: true
-      with:
-        workflow: poll-cluster.yml
-        name: poll-history
+    # Run Script
     - name: 'Run Script'
       env:
-        DISCORD_WEBHOOK: '${{ secrets.DISCORD_WEBHOOK }}'
+        DISCORD_BOT_TOKEN: '${{ secrets.DISCORD_BOT_TOKEN }}'
+        DISCORD_BOT_CHANNEL_ID: '${{ secrets.DISCORD_BOT_CHANNEL_ID }}'
         CLUSTER_HOST: '${{ secrets.CLUSTER_HOST }}'
         CLUSTER_USER: '${{ secrets.CLUSTER_USER }}'
         CLUSTER_PASSWORD: '${{ secrets.CLUSTER_PASSWORD }}'
       run: |
-        python poll_cluster.py
-    - name: 'Upload Artifact'
-      uses: actions/upload-artifact@v3
-      continue-on-error: true
-      with:
-        name: poll-history
-        path: history.json
-        retention-days: 1
+        python lambda_function.py
