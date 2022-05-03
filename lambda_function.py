@@ -2,8 +2,9 @@ import asyncio
 import logging
 import os
 import time
+
+import datetime
 import dateutil.tz
-from datetime import datetime
 from typing import Optional
 
 import fabric
@@ -120,15 +121,26 @@ def lambda_handler(event, context):
         # --- MSG --- #
 
         # check if we need to update the last message
-        last_msg: Optional[discord.Message] = None
-        if channel.last_message_id:
-            last_msg = await channel.get_partial_message(channel.last_message_id).fetch()
-            if not (last_msg.author.bot and (last_msg.author.id == webhook.id) and (bot_emoji in last_msg.content)):
+        if not channel.last_message_id:
+            LOG.info(f'- no last message found, will send a new message')
+            last_msg = None
+        else:
+            last_msg: discord.Message = await channel.get_partial_message(channel.last_message_id).fetch()
+            if last_msg.author.bot and (last_msg.author.id == webhook.id) and (bot_emoji in last_msg.content):
+                LOG.info(f'- last message found, will update it')
+            else:
+                LOG.info(f'- last message found, but it is invalid, will send a new message: `{repr(last_msg.author.bot)} is False` or `{repr(last_msg.author.id)} != {repr(webhook.id)}` or {repr(bot_emoji)} not in {repr(last_msg.content)}')
                 last_msg = None
 
-        # generate the new message
-        time_str = datetime.fromtimestamp(poll_time).astimezone(dateutil.tz.gettz('GMT+2')).strftime("[%Y/%m/%d %H:%M:%S] (GMT+2)")
-        msg_content = f'{bot_emoji}  **{bot_status}** | {time_str}\n```yaml\n{poll_string}\n```'
+        # get poll & msg creation times, then compute delta
+        tz = dateutil.tz.gettz('GMT+2')
+        time_poll = datetime.datetime.fromtimestamp(poll_time).astimezone(tz)
+        time_msg = time_poll if (last_msg is None) else last_msg.created_at.astimezone(tz)
+
+        # create the message
+        msg_time = time_poll.strftime("[%Y/%m/%d %H:%M:%S _GMT+2_]")
+        msg_delta = _fmt_timedelta(delta=time_poll - time_msg)
+        msg_content = f'{bot_emoji}  **{bot_status}**  |  Duration: **{msg_delta}**  {msg_time}\n```yaml\n{poll_string}\n```'
 
         # if the last message is not valid, or it is not the same, send a new one:
         if last_msg is not None:
@@ -195,6 +207,21 @@ def _poll_cluster_status(client: fabric.Connection, num_retries: int = 5) -> (bo
 # ========================================================================= #
 # HELPER - DISCORD                                                          #
 # ========================================================================= #
+
+
+def _fmt_timedelta(delta: datetime.timedelta, sep=' ') -> str:
+    s = abs(int(delta.total_seconds()))
+    y, s = divmod(s, 60*60*24*365)
+    d, s = divmod(s, 60*60*24)
+    h, s = divmod(s, 60*60)
+    m, s = divmod(s, 60)
+    i, segments = 0, []
+    if (y > 0 or i > 5):             i, segments = max(i, 5), segments + [f'{y}y']
+    if (d > 0 or i > 4):             i, segments = max(i, 4), segments + [f'{d}d']
+    if (h > 0 or i > 3) and (i < 5): i, segments = max(i, 3), segments + [f'{h}h']
+    if (m > 0 or i > 2) and (i < 4): i, segments = max(i, 2), segments + [f'{m}m']
+    if (s > 0 or i > 1) and (i < 3): i, segments = max(i, 1), segments + [f'{s}s']
+    return ('-' if delta.total_seconds() < 0 else '') + sep.join(segments)
 
 
 def _make_discord_bot_runner(bot_token: str):
