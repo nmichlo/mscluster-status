@@ -236,7 +236,7 @@ func fmtTimeDuration(delta time.Duration, sep string) string {
 	}
 	result := sign + strings.Join(segments, sep)
 	if result == "" {
-		return "Now"
+		return "N/A"
 	}
 	return result
 }
@@ -450,7 +450,8 @@ func pollAndReport() {
 	}
 
 	// create the message
-	pollTimeStr := pollTime.Format("**2006-01-02 15:04** (-0700)")
+	// pollTimeStr := pollTime.Format("**2006-01-02 15:04** (-0700)")
+	pollTimeStr := pollTime.Format("**02 Jan 15:04** (-0700)")
 	elapsedTimeStr := fmtTimeDuration(pollTime.Sub(msgTime), " ")
 	msgContent := fmt.Sprintf("%s **%s**  |  Duration: **%s**  |  Last Poll: %s\n```yaml\n%s\n```", botEmoji, botStatus, elapsedTimeStr, pollTimeStr, pollString)
 
