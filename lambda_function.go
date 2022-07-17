@@ -80,12 +80,14 @@ func pollClusterStatus(client *goph.Client, retries int) (bool, string, time.Tim
 	pollErr := "unknown error"
 	// try polling multiple times, if we fail each time then send a message!
 	for i := 0; i < retries; i++ {
+		log.Printf("polling cluster, attempt: %d", i+1)
 		pollTime = time.Now()
 		// try poll for the cluster status
 		out, err := client.Run("sinfo --summarize")
 		// we failed to poll the cluster status
 		if err != nil {
 			pollErr = err.Error()
+			continue
 		}
 		// we successfully polled the cluster status
 		return true, string(out), pollTime
