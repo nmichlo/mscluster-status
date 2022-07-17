@@ -4,45 +4,53 @@ This utility polls the status of a ssh server, and tries to run
 the `sinfo` command to obtain the status of the cluster as a whole.
 - The utility logs this information to a discord channel if a state change is detected,
   ie. moving from online to offline, or vice-versa.
+- Messages are updated with the online/offline duration if the state remains the same,
+  otherwise if the state changes from online to offline or vice versa, then a new message is posted.
 
 ## Setup
 
 The following environment variables are **required**:
-- `DISCORD_WEBHOOK`:  (url) The webhook to post messages to a discord channel.
-- `CLUSTER_HOST`:     (url) The ip/hostname of the ssh server or cluster headnode
-- `CLUSTER_USER`:     (str) The ssh username to login
-- `CLUSTER_PASSWORD`: (str) The ssh password to login
+- `DISCORD_BOT_TOKEN`:             (str) The discord bot token.
+- `DISCORD_BOT_CHANNEL_ID`:        (str) The channel ID of the channel to edit if `DEBUG_SCRIPT=0`
+- `DISCORD_BOT_CHANNEL_ID_DEBUG`:  (str) The channel ID of the channel to edit if `DEBUG_SCRIPT=1`
+- `CLUSTER_HOST`:                  (url) The ip/hostname of the ssh server or cluster headnode
+- `CLUSTER_USER`:                  (str) The ssh username to login
+- `CLUSTER_PASSWORD`:              (str) The ssh password to login
+- `DEBUG_SCRIPT`:                  (int) 1 if testing [default], 0 if production
 
 The following environment variables are **optional**:
-- `DISCORD_USER`:            (str) The username of the discord bot that will be displayed to users.
-- `DISCORD_IMG`:             (url) A link to a profile picture that the discord bot will display.
-- `DISCORD_MSG_QUOTE`:       (default: false) If we should include a random qoute after the status message
-- `DISCORD_MSG_INFO`:        (default: true) If the information about each cluster partition should be appended to online status messages.
-- `DISCORD_MSG_ALWAYS`:      (default: false) If a message should always be posted, otherwise a message is only posted on a state change.
-- `CLUSTER_PORT`:            (default: 22) The port of the ssh server.
-- `CLUSTER_CONNECT_TIMEOUT`: (default: 10) How long to an attempt is made to establish a connection with the ssh server.
+- `CLUSTER_PORT`:            (default: 22) The ssh port for the server
+- `CLUSTER_CONNECT_RETRIES`: (default: 5) How many times to attempt connecting to the ssh server.
+- `DISCORD_BOT_RETRIES`:     (default: 3) How many times to attempt connecting to discord to post updates.
+- `DISCORD_TIME_LOCATION`:   (default: "Africa/Johannesburg") The timezone to use for formatting time in messages.
+
+The following environment variables are **optional** and are only for formatting when online/offline:
+- `DISCORD_USER_ON`: (default: "Cluster Status") The username to post under when the cluster is online.
+- `DISCORD_USER_OFF`: (default: "Cluster Status") The username to post under when the cluster is offline.
+- `DISCORD_IMG_ON`: (default: "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_happy.jpg")
+- `DISCORD_IMG_OFF`: (default: "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_glum.jpg")
+- `DISCORD_EMOJI_ON`: (default: "🌞") The emoji to search for in the update message to save the online state.
+- `DISCORD_EMOJI_OFF`: (default: "⛈") The emoji to search for in the update message to save the offline state.
+- `DISCORD_CHANNEL_NAME_ON`: (default: "cluster-status-🌞") The channel name to use when the cluster is online
+- `DISCORD_CHANNEL_NAME_OFF`: (default: "cluster-status-⛈") The channel name to use when the cluster is offline
 
 ## Note On Persisting State
 
-The script produces the file `history.json` in the current working directory which is used to persist
-state between invocations. This file needs to be cached by the github action as an artefact, that subsequent
-runs search for and retrieve.
+The script posts messages to discord and searches the last message for the emoji contained
+in `DISCORD_EMOJI_ON` or `DISCORD_EMOJI_OFF` to save the state. If an emoji is found, then
+that is the last online/offline state.
+- If the current polled state does not match, then we post a new message instead of updating the old message.
 
-# Note On Cron Polling
+# Cloud Setup
 
-The github cron event is very unreliable. To work around this we use AWS to
-submit a POST request to a webhook that manually starts the github action.
-- https://us-east-1.console.aws.amazon.com/lambda/home?region=us-east-1#/functions
+AWS Lambda is triggered by an AWS EventBridge Rule:
+1. **events**: https://us-east-1.console.aws.amazon.com/events/home?region=us-east-1#/rules
+2. **lambda**: https://us-east-1.console.aws.amazon.com/lambda/home?region=us-east-1#/functions
 
-The AWS Lambda is triggered by an AWS EventBridge Rule:
-- https://us-east-1.console.aws.amazon.com/events/home?region=us-east-1#/rules
+We use the AWS free tier to run this script.
 
-Resources:
-- https://upptime.js.org/blog/2021/01/22/github-actions-schedule-not-working/
-- https://docs.github.com/en/rest/guides/getting-started-with-the-rest-api#authentication
-- https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch
+## Upload
 
-# Note On Cron Deletion
-There is no easy way to delete action runs
-- We use the github api to find and delete all but the 10 newest runs using AWS, with a similar setup to
-  the above, except that we run it once a day at midnight GMT.
+1. Run `aws_build.sh` to generate `main.zip` and upload this to the AWS
+   lambda function with the `Go 1.x` runtime setup for arch `x86_64`. The
+   handler should also be changed to `main`
