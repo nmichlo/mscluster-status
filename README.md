@@ -27,8 +27,8 @@ The following environment variables are **optional**:
 The following environment variables are **optional** and are only for formatting when online/offline:
 - `DISCORD_USER_ON`: (default: "Cluster Status") The username to post under when the cluster is online.
 - `DISCORD_USER_OFF`: (default: "Cluster Status") The username to post under when the cluster is offline.
-- `DISCORD_IMG_ON`: (default: "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_happy.jpg")
-- `DISCORD_IMG_OFF`: (default: "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_glum.jpg")
+- `DISCORD_IMG_ON`: (default: "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/color_blind_on.png")
+- `DISCORD_IMG_OFF`: (default: "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/color_blind_off.png")
 - `DISCORD_EMOJI_ON`: (default: "🌞") The emoji to search for in the update message to save the online state.
 - `DISCORD_EMOJI_OFF`: (default: "⛈") The emoji to search for in the update message to save the offline state.
 - `DISCORD_CHANNEL_NAME_ON`: (default: "cluster-status-🌞") The channel name to use when the cluster is online
