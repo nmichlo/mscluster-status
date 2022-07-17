@@ -234,7 +234,11 @@ func fmtTimeDuration(delta time.Duration, sep string) string {
 	if delta.Seconds() < 0 {
 		sign = "-"
 	}
-	return sign + strings.Join(segments, sep)
+	result := sign + strings.Join(segments, sep)
+	if result == "" {
+		return "Now"
+	}
+	return result
 }
 
 /* ======================================================================== */
@@ -292,8 +296,8 @@ func pollAndReport() {
 	// discord: get the information to display
 	_DISCORD_USER_ON := getEnvStrOrFallback("DISCORD_USER_ON", "Cluster Status")
 	_DISCORD_USER_OFF := getEnvStrOrFallback("DISCORD_USER_OFF", "Cluster Status")
-	_DISCORD_IMG_ON := getEnvStrOrFallback("DISCORD_IMG_ON", "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_happy.jpg")
-	_DISCORD_IMG_OFF := getEnvStrOrFallback("DISCORD_IMG_OFF", "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_glum.jpg")
+	_DISCORD_IMG_ON := getEnvStrOrFallback("DISCORD_IMG_ON", "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/color_blind_on.png")
+	_DISCORD_IMG_OFF := getEnvStrOrFallback("DISCORD_IMG_OFF", "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/color_blind_off.png")
 	_DISCORD_EMOJI_ON := getEnvStrOrFallback("DISCORD_EMOJI_ON", "🌞")
 	_DISCORD_EMOJI_OFF := getEnvStrOrFallback("DISCORD_EMOJI_OFF", "⛈")
 	_DISCORD_CHANNEL_NAME_ON := getEnvStrOrFallback("DISCORD_CHANNEL_NAME_ON", "cluster-status-🌞")
@@ -430,7 +434,7 @@ func pollAndReport() {
 		log.Println("- no last message found, will send a new message")
 	} else {
 		lastMsg, err = session.ChannelMessage(discordChannelId, channel.LastMessageID)
-		if lastMsg.Author.Bot && (lastMsg.Author.ID == webhook.ID) && strings.Contains(lastMsg.Content, botEmoji) {
+		if lastMsg != nil && lastMsg.Author.Bot && (lastMsg.Author.ID == webhook.ID) && strings.Contains(lastMsg.Content, botEmoji) {
 			log.Println("- last message found, will update it")
 		} else {
 			log.Println("- last message found, but it is invalid, will send a new message: `{repr(last_msg.author.bot)} is False` or `{repr(last_msg.author.id)} != {repr(webhook.id)}` or {repr(bot_emoji)} not in {repr(last_msg.content)}")
