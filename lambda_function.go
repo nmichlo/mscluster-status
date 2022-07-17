@@ -269,6 +269,9 @@ func NewSshSession(user string, addr string, auth goph.Auth, port int) (client *
 /* ======================================================================== */
 
 func pollAndReport() {
+	// debug
+	DEBUG_SCRIPT := getEnvIntOrFallback("DEBUG_SCRIPT", 1) // debug if != 0
+
 	// ssh: authentication details
 	CLUSTER_HOST := getEnvStr("CLUSTER_HOST")
 	CLUSTER_USER := getEnvStr("CLUSTER_USER")
@@ -280,7 +283,8 @@ func pollAndReport() {
 
 	// discord: get the bot token & channel to modify
 	DISCORD_BOT_TOKEN := getEnvStr("DISCORD_BOT_TOKEN")
-	DISCORD_BOT_CHANNEL_ID := getEnvStr("DISCORD_BOT_CHANNEL_ID")
+	_DISCORD_BOT_CHANNEL_ID := getEnvStrOrFallback("DISCORD_BOT_CHANNEL_ID", "")
+	_DISCORD_BOT_CHANNEL_ID_DEBUG := getEnvStrOrFallback("DISCORD_BOT_CHANNEL_ID_DEBUG", "")
 	DISCORD_BOT_WEBHOOK_NAME := getEnvStrOrFallback("DISCORD_BOT_WEBHOOK_NAME", "[BOT] Cluster Status Hook [DO-NOT-EDIT]")
 	DISCORD_BOT_RETRIES := getEnvIntOrFallback("DISCORD_BOT_RETRIES", 3)
 	DISCORD_TIME_LOCATION := getEnvStrOrFallback("DISCORD_TIME_LOCATION", "Africa/Johannesburg")
@@ -292,13 +296,27 @@ func pollAndReport() {
 	_DISCORD_IMG_OFF := getEnvStrOrFallback("DISCORD_IMG_OFF", "https://raw.githubusercontent.com/nmichlo/uploads/main/imgs/avatar/cat_glum.jpg")
 	_DISCORD_EMOJI_ON := getEnvStrOrFallback("DISCORD_EMOJI_ON", "🌞")
 	_DISCORD_EMOJI_OFF := getEnvStrOrFallback("DISCORD_EMOJI_OFF", "⛈")
-	_DISCORD_CHANNEL_NAME_ON := getEnvStrOrFallback("DISCORD_CHANNEL_NAME_ON", "test-cluster-status-🌞")
-	_DISCORD_CHANNEL_NAME_OFF := getEnvStrOrFallback("DISCORD_CHANNEL_NAME_OFF", "test-cluster-status-⛈")
+	_DISCORD_CHANNEL_NAME_ON := getEnvStrOrFallback("DISCORD_CHANNEL_NAME_ON", "cluster-status-🌞")
+	_DISCORD_CHANNEL_NAME_OFF := getEnvStrOrFallback("DISCORD_CHANNEL_NAME_OFF", "cluster-status-⛈")
 
 	// check variables
 	timeLocation, err := time.LoadLocation(DISCORD_TIME_LOCATION)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// - get debug settings
+	var discordChannelId string
+	if DEBUG_SCRIPT != 0 {
+		discordChannelId = _DISCORD_BOT_CHANNEL_ID_DEBUG
+		if discordChannelId == "" {
+			log.Fatalf("DISCORD_BOT_CHANNEL_ID_DEBUG must be specified")
+		}
+	} else {
+		discordChannelId = _DISCORD_BOT_CHANNEL_ID
+		if discordChannelId == "" {
+			log.Fatalf("DISCORD_BOT_CHANNEL_ID must be specified")
+		}
 	}
 
 	/* ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ */
@@ -332,6 +350,11 @@ func pollAndReport() {
 		}
 	}
 
+	// - prepend test string to channel name
+	if DEBUG_SCRIPT != 0 {
+		botChannelName = "test-" + botChannelName
+	}
+
 	/* ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ */
 	/* Discord                                       */
 	/* ~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~ */
@@ -353,7 +376,7 @@ func pollAndReport() {
 
 	// - load the channel, and make sure no errors occur doing this!
 	log.Println("- getting channel")
-	channel, err := session.Channel(DISCORD_BOT_CHANNEL_ID)
+	channel, err := session.Channel(discordChannelId)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -364,7 +387,7 @@ func pollAndReport() {
 	// - adjust the channel name if it is not correct
 	if channel.Name != botChannelName {
 		log.Printf("- editing channel name: '%s'\n", botChannelName)
-		_, err := session.ChannelEdit(DISCORD_BOT_CHANNEL_ID, botChannelName)
+		_, err := session.ChannelEdit(discordChannelId, botChannelName)
 		if err != nil {
 			log.Printf("- editing channel name failed... %s", err.Error())
 		}
@@ -377,7 +400,7 @@ func pollAndReport() {
 
 	// get webhook to send message
 	log.Println("- getting webhooks")
-	webhooks, err := session.ChannelWebhooks(DISCORD_BOT_CHANNEL_ID)
+	webhooks, err := session.ChannelWebhooks(discordChannelId)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -393,7 +416,7 @@ func pollAndReport() {
 	// - create webhook if it does not exist
 	if webhook == nil {
 		log.Printf("- creating webhook: '%s'", DISCORD_BOT_WEBHOOK_NAME)
-		webhook, err = session.WebhookCreate(DISCORD_BOT_CHANNEL_ID, DISCORD_BOT_WEBHOOK_NAME, "")
+		webhook, err = session.WebhookCreate(discordChannelId, DISCORD_BOT_WEBHOOK_NAME, "")
 		if err != nil {
 			log.Fatalf("* failed to create webhook, please meanually create the webhook with the name: '%s' on the channel: '%s'", DISCORD_BOT_WEBHOOK_NAME, botChannelName)
 		}
@@ -406,7 +429,7 @@ func pollAndReport() {
 	if channel.LastMessageID == "" {
 		log.Println("- no last message found, will send a new message")
 	} else {
-		lastMsg, err = session.ChannelMessage(DISCORD_BOT_CHANNEL_ID, channel.LastMessageID)
+		lastMsg, err = session.ChannelMessage(discordChannelId, channel.LastMessageID)
 		if lastMsg.Author.Bot && (lastMsg.Author.ID == webhook.ID) && strings.Contains(lastMsg.Content, botEmoji) {
 			log.Println("- last message found, will update it")
 		} else {
