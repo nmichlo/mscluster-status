@@ -102,6 +102,9 @@ def lambda_handler(event, context):
     async def _run(client: discord.Client):
         # --- CHANNEL --- #
 
+        print(list(client.get_all_channels()))
+        exit(1)
+
         LOG.info('- getting channel')
         channel = client.get_channel(DISCORD_BOT_CHANNEL_ID)
         assert isinstance(channel, discord.channel.TextChannel)
